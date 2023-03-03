@@ -137,3 +137,4 @@ dmypy.json
 /topogans/
 /slides_src/
 /tex_src/
+*.sh
