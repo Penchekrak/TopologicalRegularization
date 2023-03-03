@@ -1,0 +1,55 @@
+logger:
+    project: "topogans"
+    offline: true
+    entity: "skoltech_ml2022_project_synced_target_nets"
+trainer:
+    limit_val_batches: 1
+    max_epochs: 300
+    log_every_n_steps: 1
+    check_val_every_n_epoch: 15
+    accelerator: 'cuda'
+    gpus: 1
+    callbacks:
+        - _target_: src.callbacks.PlotSampledImages
+        - _target_: src.callbacks.GC
+trainable:
+    _target_: src.trainable.Trainable
+
+    generator:
+        _target_: src.models.ConvolutionalGenerator
+        latent_dim: 100
+        hidden_dim: 64
+        channels: 1
+
+    losses:
+        -
+            _target_: src.losses.StandardGANLoss
+            discriminator:
+                _target_: src.models.ConvolutionalDiscriminator
+                channels: 1
+                hidden_dim: 64
+                sigmoid: true
+
+    optimizer_config:
+        generator:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+                lr: 0.0002
+                betas:
+                    - 0.5
+                    - 0.999
+            frequency: 1
+        losses:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+                lr: 0.0002
+                betas:
+                    - 0.5
+                    - 0.999
+            frequency: 1
+datamodule:
+    _target_: src.datasets.MNISTDataModule
+    batch_size: 128
+    data_dir: /home/anspiridonov/TopologicalRegularization/data/mnist

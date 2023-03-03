@@ -1,0 +1,8 @@
+defaults:
+    - celeba_gan
+    - _self_
+trainable:
+    losses:
+        -
+            _target_: src.losses.NormalizedMTopDivYXLoss
+            dimension: 0

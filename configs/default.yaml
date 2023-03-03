@@ -1,0 +1,31 @@
+logger:
+    project: "ENOT"
+    entity: "skoltech_ml2022_project_synced_target_nets"
+trainer:
+    limit_train_batches: 64
+    limit_val_batches: 10
+    max_epochs: 1000
+    callbacks:
+        - _target_: src.callbacks.GC
+    log_every_n_steps: 20
+    gpus: 1
+trainable:
+    _target_: src.trainable.ENOTTrainable
+    n_latent_samples: 16
+    batch_size: 128
+    transport_map_losses:
+        - _target_: src.losses.EuclideanDistanceCost
+        - _target_: src.losses.PotentialLoss
+    potential_losses:
+        - _target_: src.losses.PotentialLoss
+    optimizer_config:
+        flow_optimizer:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+            frequency: 1
+        potential_optimizer:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+            frequency: 1

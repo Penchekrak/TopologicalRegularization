@@ -1,0 +1,16 @@
+defaults:
+    - four_gaussians_gan
+    - _self_
+trainer:
+    callbacks:
+        - _target_: src.callbacks.PlotDistributions2D
+          add_potential_contour: False
+        - _target_: src.callbacks.LogLikelihood
+        - _target_: src.callbacks.GC
+trainable:
+    losses:
+        -
+            _target_: src.losses.MTopDivYXLoss
+            dimension: 0
+datamodule:
+    batch_size: 32

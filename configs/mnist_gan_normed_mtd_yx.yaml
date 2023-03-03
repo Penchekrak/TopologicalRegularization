@@ -1,0 +1,18 @@
+defaults:
+    - mnist_gan
+    - _self_
+trainer:
+    max_epochs: 100
+    check_val_every_n_epoch: 20
+trainable:
+    losses:
+        -
+            _target_: src.losses.StandardGANLoss
+            discriminator:
+                _target_: src.models.ConvolutionalDiscriminator
+                channels: 1
+                hidden_dim: 64
+                sigmoid: true
+        -
+            _target_: src.losses.NormalizedMTopDivYXLoss
+            dimension: 0
