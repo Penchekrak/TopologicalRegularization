@@ -15,7 +15,6 @@ class Loss(torch.nn.Module):
     def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode,
                 ) -> torch.Tensor:
         """
-        :param cache:
         :param output:
         :param batch:
         :return:
@@ -115,16 +114,19 @@ class MTopDivYXLoss(Loss):
         self.dim = dimension
         self.denoising_fraction = denoising_fraction
 
+    def _forward_impl(self, batch: Batch, output: tp.Any) -> torch.Tensor:
+        return mtopdiv(get_random_sample(batch, batch.shape[0] // self.denoising_fraction), output, self.dim)
+
     def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode) -> torch.Tensor:
         if optimization_mode == utils.OptimizationMode.GENERATOR:
-            return mtopdiv(get_random_sample(batch, batch.shape[0] // self.denoising_fraction), output, self.dim)
+            return self._forward_impl(batch, output)
         elif optimization_mode == utils.OptimizationMode.DISCRIMINATOR:
             return None
 
 
 class MTopDivXYLoss(MTopDivYXLoss):
-    def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode) -> torch.Tensor:
-        return super().forward(output, batch, optimization_mode)
+    def _forward_impl(self, batch: Batch, output: tp.Any) -> torch.Tensor:
+        return super()._forward_impl(output, batch)
 
 
 class NormalizedMTopDivYXLoss(MTopDivYXLoss):
@@ -134,11 +136,8 @@ class NormalizedMTopDivYXLoss(MTopDivYXLoss):
     def set_normalizing_constant(self, batch1, batch2):
         self.normalizing_constant = mtopdiv(batch1, batch2, self.dim)
 
-    def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode) -> torch.Tensor:
-        if optimization_mode == utils.OptimizationMode.GENERATOR:
-            return super().forward(batch, output, optimization_mode) / self.normalizing_constant
-        elif optimization_mode == utils.OptimizationMode.DISCRIMINATOR:
-            return None
+    def _forward_impl(self, batch: Batch, output: tp.Any) -> torch.Tensor:
+        return super()._forward_impl(batch, output) / self.normalizing_constant
 
 
 class NormalizedMTopDivXYLoss(NormalizedMTopDivYXLoss, MTopDivXYLoss):
@@ -146,11 +145,8 @@ class NormalizedMTopDivXYLoss(NormalizedMTopDivYXLoss, MTopDivXYLoss):
 
 
 class SquaredNormalizedMTopDivYXLoss(NormalizedMTopDivYXLoss):
-    def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode) -> torch.Tensor:
-        if optimization_mode == utils.OptimizationMode.GENERATOR:
-            return (super().forward(batch, output, optimization_mode) - 1) ** 2
-        elif optimization_mode == utils.OptimizationMode.DISCRIMINATOR:
-            return None
+    def _forward_impl(self, batch: Batch, output: tp.Any) -> torch.Tensor:
+        return (super()._forward_impl(batch, output) - 1) ** 2
 
 
 class SquaredNormalizedMTopDivXYLoss(SquaredNormalizedMTopDivYXLoss, NormalizedMTopDivXYLoss):
@@ -158,39 +154,21 @@ class SquaredNormalizedMTopDivXYLoss(SquaredNormalizedMTopDivYXLoss, NormalizedM
 
 
 class PerceptualDistanceSquaredNormalizedMTopDivYXLoss(SquaredNormalizedMTopDivYXLoss):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, weights_path: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        blocks = []
-        blocks.append(torchvision.models.vgg16(pretrained=True).features[:4].eval())
-        blocks.append(torchvision.models.vgg16(pretrained=True).features[4:9].eval())
-        blocks.append(torchvision.models.vgg16(pretrained=True).features[9:16].eval())
-        blocks.append(torchvision.models.vgg16(pretrained=True).features[16:23].eval())
-        for bl in blocks:
-            for p in bl.parameters():
-                p.requires_grad = False
-        self.blocks = torch.nn.ModuleList(blocks)
-        self.transform = torch.nn.functional.interpolate
-        self.resize = True
-        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
-        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
-        self.feature_layers = [0, 1, 2, 3]
-        self.style_layers = []
+        self.model = torchvision.models.resnet18()
+        self.model.load_state_dict(torch.load(weights_path, map_location='cpu'))
 
-    def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode):
-        if optimization_mode == utils.OptimizationMode.GENERATOR:
-            x_vector, y_vector = self.get_feature_vectors(batch, output)
-            return super().forward(y_vector, x_vector, optimization_mode)
+    def _forward_impl(self, batch: Batch, output: tp.Any):
+        x_vector, y_vector = self.get_feature_vectors(batch, output)
+        return super()._forward_impl(y_vector, x_vector)
 
     @torch.no_grad()
     def set_normalizing_constant(self, batch1, batch2):
         x_vector, y_vector = self.get_feature_vectors(batch1, batch2)
         super().set_normalizing_constant(x_vector, y_vector)
 
-
     def get_feature_vectors(self, batch, output):
-        if output.shape[1] != 3:
-            output = output.repeat(1, 3, 1, 1)
-            batch = batch.repeat(1, 3, 1, 1)
         output = (output - self.mean) / self.std
         batch = (batch - self.mean) / self.std
         if self.resize:

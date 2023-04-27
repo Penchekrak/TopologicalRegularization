@@ -70,21 +70,7 @@ class Trainable(pl.LightningModule):
             batch: src.utils.Batch,
             batch_idx: int
     ):
-        # log = {'trainer/global_step': self.trainer.global_step}
-        # prefix = ''
         output = self.generator(batch)
-        # prefix = 'Validation: '
-        # loss = 0
-        # for loss_fn in self.losses:
-        #     loss_value = loss_fn(batch, output, optimization_mode)
-        #     if loss_value is not None:
-        #         log[prefix + loss_fn._get_name()] = loss_value
-        #         loss_value *= loss_fn.weight
-        #         log[prefix + loss_fn._get_name() + ' weighted'] = loss_value
-        #         loss += loss_value
-        # log[prefix + 'TotalLoss'] = loss
-
-        # self.trainer.logger.experiment.log(log)
         return output
 
     @staticmethod
