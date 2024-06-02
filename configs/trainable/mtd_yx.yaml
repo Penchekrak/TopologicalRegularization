@@ -1,0 +1,5 @@
+defaults:
+  - gan
+losses:
+  - _target_: src.losses.MTopDivYXLoss
+    dimension: 0

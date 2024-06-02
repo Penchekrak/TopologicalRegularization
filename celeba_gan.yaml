@@ -3,7 +3,7 @@ logger:
     offline: true
     entity: "penchekrak"
 trainer:
-    limit_val_batches: 5
+    limit_val_batches: 1
     max_epochs: 300
     log_every_n_steps: 1
     check_val_every_n_epoch: 15
@@ -11,11 +11,6 @@ trainer:
     callbacks:
         - _target_: src.callbacks.PlotSampledImages
         - _target_: src.callbacks.GC
-        - _target_: src.callbacks.MNISTClassDistributionCallback
-          samples_count: 2000
-        - _target_: src.callbacks.NDBCallback
-          feature_extractor: mnist_extractor
-          samples_count: 2000
 trainable:
     _target_: src.trainable.Trainable
 
@@ -23,16 +18,16 @@ trainable:
         _target_: src.models.ConvolutionalGenerator
         latent_dim: 100
         hidden_dim: 64
-        channels: 1
+        channels: 3
 
     losses:
         -
-            _target_: src.losses.WassersteinGPGANLoss
+            _target_: src.losses.StandardGANLoss
             discriminator:
                 _target_: src.models.ConvolutionalDiscriminator
-                channels: 1
+                channels: 3
                 hidden_dim: 64
-                sigmoid: false
+                sigmoid: true
 
     optimizer_config:
         generator:
@@ -53,3 +48,7 @@ trainable:
                     - 0.5
                     - 0.999
             frequency: 1
+datamodule:
+    _target_: src.datasets.CelebADataModule
+    batch_size: 128
+    data_dir: /home/anspiridonov/TopologicalRegularization/data/celeba

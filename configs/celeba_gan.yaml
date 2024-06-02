@@ -1,16 +1,20 @@
 logger:
     project: "topogans"
     offline: true
-    entity: "skoltech_ml2022_project_synced_target_nets"
+    entity: "penchekrak"
 trainer:
-    limit_val_batches: 1
+    limit_val_batches: 5
     max_epochs: 300
     log_every_n_steps: 1
     check_val_every_n_epoch: 15
     accelerator: 'cuda'
-    gpus: 1
     callbacks:
         - _target_: src.callbacks.PlotSampledImages
+        - _target_: src.callbacks.NDBCallback
+          feature_extractor: face_extractor
+          samples_count: 2048
+          number_of_bins: 64
+        - _target_: src.callbacks.FIDCallback
         - _target_: src.callbacks.GC
 trainable:
     _target_: src.trainable.Trainable
@@ -51,5 +55,5 @@ trainable:
             frequency: 1
 datamodule:
     _target_: src.datasets.CelebADataModule
-    batch_size: 128
-    data_dir: /home/anspiridonov/TopologicalRegularization/data/celeba
+    batch_size: 512
+    data_dir: spiridonov/data/celeba/celeba

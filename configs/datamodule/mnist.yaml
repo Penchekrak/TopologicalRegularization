@@ -1,0 +1,4 @@
+datamodule:
+    _target_: src.datasets.MNISTDataModule
+    batch_size: 512
+    data_dir: spiridonov/TopReg/data/mnist/MNIST

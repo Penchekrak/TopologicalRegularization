@@ -82,3 +82,6 @@ def BW2_UVP_gaussian(sigma1, sigma2, entropy_weight, transport_map, original_sam
     ) / var_true_OT
 
     return BW2_UVP
+
+
+

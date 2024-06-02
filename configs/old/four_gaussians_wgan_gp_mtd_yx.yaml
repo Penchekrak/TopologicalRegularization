@@ -14,5 +14,3 @@ trainable:
         -
             _target_: src.losses.MTopDivYXLoss
             dimension: 0
-datamodule:
-    batch_size: 32

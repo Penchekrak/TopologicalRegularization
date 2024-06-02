@@ -1,0 +1,26 @@
+\documentclass[a4paper, 12pt]{skthesis}
+\usepackage{lgrind}
+\usepackage{cmap}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{fontawesome}
+\usepackage{subcaption}
+\usepackage[linesnumbered]{algorithm2e}
+\usepackage{amssymb,amsmath,amsthm}
+\newtheorem{theorem}{Theorem}
+\usepackage{mathtools} % Bonus
+%\usepackage[T2A]{fontenc}
+
+\begin{document}
+\newcommand{\perD}      {{\mathcal{P}}} %{{P}}
+\newcommand{\anotherperD}   {{\mathcal{Q}}} %{{Q}}
+% fix title page in chapters/cover
+\include{chapters/cover} % Your title pages, abstracts and acknowledgments 
+\include{chapters/contents} % Probably you don't need to change it
+\include{chapters/chap1} 
+% \appendix
+% \include{chapters/appa}
+% \include{chapters/appb}
+\include{chapters/biblio}
+\end{document}
+

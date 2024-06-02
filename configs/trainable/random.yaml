@@ -1,0 +1,4 @@
+defaults:
+ - gan
+losses:
+  - _target_: src.losses.RandomDistanceMatrixLoss

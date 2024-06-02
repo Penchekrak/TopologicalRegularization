@@ -1,31 +1,34 @@
 logger:
-    project: "ENOT"
-    entity: "skoltech_ml2022_project_synced_target_nets"
+    project: "topogans"
+    offline: true
+    entity: "penchekrak"
 trainer:
-    limit_train_batches: 64
+    limit_train_batches: 100
     limit_val_batches: 10
     max_epochs: 1000
+    log_every_n_steps: 1
+    check_val_every_n_epoch: 50
+    accelerator: 'cuda'
     callbacks:
+        - _target_: src.callbacks.PlotDistributions2D
+          add_potential_contour: False
+#        - _target_: src.callbacks.LogLikelihood
         - _target_: src.callbacks.GC
-    log_every_n_steps: 20
-    gpus: 1
+        - _target_: src.callbacks.NDBCallback
+          samples_count: 1000
+
 trainable:
-    _target_: src.trainable.ENOTTrainable
-    n_latent_samples: 16
-    batch_size: 128
-    transport_map_losses:
-        - _target_: src.losses.EuclideanDistanceCost
-        - _target_: src.losses.PotentialLoss
-    potential_losses:
-        - _target_: src.losses.PotentialLoss
+    _target_: src.trainable.Trainable
     optimizer_config:
-        flow_optimizer:
+        generator:
             optimizer:
                 _target_: torch.optim.Adam
                 _partial_: True
             frequency: 1
-        potential_optimizer:
+        losses:
             optimizer:
                 _target_: torch.optim.Adam
                 _partial_: True
             frequency: 1
+datamodule:
+    batch_size: 256

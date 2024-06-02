@@ -1,29 +1,21 @@
 import gc
 import typing as tp
+from types import SimpleNamespace
 
-import matplotlib.pyplot as plt
-import numpy
 import numpy as np
 import torch
 import wandb
 from einops import einops
-from matplotlib import collections as mc
-from matplotlib.axes import Axes
+from matplotlib import pyplot as plt
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import Callback
-import torch
-from torch import linalg
+from scipy.stats import norm
+from sklearn.cluster import MiniBatchKMeans
 
 import src.utils
+from src.models.lenet import LeNet5
 from src.trainable import Trainable
-
-
-import os
-import numpy as np
-from sklearn.cluster import KMeans
-from scipy.stats import norm
-from matplotlib import pyplot as plt
-import pickle as pkl
+from facenet_pytorch import InceptionResnetV1
 
 
 class LogLikelihood(Callback):
@@ -272,13 +264,13 @@ class PlotSampledImages(Callback):
         source_samples_axis.imshow(source_samples_grid)
         source_samples_axis.get_xaxis().set_visible(False)
         source_samples_axis.set_yticks([])
-        source_samples_axis.set_ylabel(r'$x\sim\mathbb{Q}$', fontsize=30)
+        source_samples_axis.set_ylabel('Target', fontsize=30)
 
         latent_samples_axes.imshow(generated_samples_grid)
 
         latent_samples_axes.get_xaxis().set_visible(False)
         latent_samples_axes.set_yticks([])
-        latent_samples_axes.set_ylabel(r'$G(z)#\mathbb{P}$ for different $z$', fontsize=30)
+        latent_samples_axes.set_ylabel('Generated', fontsize=30)
 
         sampled_images_fig.tight_layout(pad=0.001)
         trainer.logger.experiment.log(
@@ -299,15 +291,34 @@ class GC(Callback):
             gc.collect()
             torch.cuda.empty_cache()
 
+    def on_validation_epoch_end(self, trainer: Trainer, trainable: Trainable) -> None:
+        self.on_train_epoch_end(trainer, trainable)
+
+mnist_classifier = LeNet5().cuda()
+facenet = InceptionResnetV1(pretrained='vggface2').eval().cuda()
+
+
+feature_extractors = dict(
+    flattener=lambda x: x.flatten(start_dim=1, end_dim=-1),
+    mnist_extractor=mnist_classifier.compute_embedding,
+    face_extractor=lambda x: facenet(torch.nn.functional.interpolate(x, (160, 160))),
+)
+
+
 class NDBCallback(Callback):
+    target_samples: tp.Union[torch.Tensor, tp.List]
+    generated_samples: tp.Union[torch.Tensor, tp.List]
+    current_samples_count: int
+
     def __init__(
             self,
             samples_count: int = 8,
-            number_of_bins=(100,),
+            number_of_bins=100,
             significance_level=0.05,
             z_threshold=None,
             whitening=False,
             max_dims=None,
+            feature_extractor=None
     ):
         """
         NDB Evaluation Class
@@ -330,6 +341,12 @@ class NDBCallback(Callback):
         self.bin_proportions = None
         self.ref_sample_size = None
         self.used_d_indices = None
+        self.feature_extractor = feature_extractors.get(feature_extractor, lambda x: x)
+
+    def on_validation_epoch_start(self, trainer: Trainer, trainable: Trainable) -> None:
+        self.current_samples_count = 0
+        self.generated_samples = []
+        self.target_samples = []
 
     def on_validation_batch_end(
             self,
@@ -343,54 +360,120 @@ class NDBCallback(Callback):
         num_samples_to_take = min(self.samples_count - self.current_samples_count, len(batch))
         if num_samples_to_take > 0:
             self.target_samples.append(
-                batch[:num_samples_to_take].cpu()
+                self.feature_extractor(batch[:num_samples_to_take]).cpu()
             )
             self.generated_samples.append(
-                outputs[:num_samples_to_take].cpu()
+                self.feature_extractor(outputs[:num_samples_to_take]).cpu()
             )
             self.current_samples_count += num_samples_to_take
 
-    def construct_bins(self, training_samples, bins_file):
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: Trainable) -> None:
+        self.target_samples = torch.cat(self.target_samples).numpy()
+        self.generated_samples = torch.cat(self.generated_samples).numpy()
+        generated_bins, target_bins = self.compute_histograms(reference=self.target_samples,
+                                                              query=self.generated_samples)
+        results = self.evaluate(target_bins, generated_bins)
+        trainer.logger.experiment.log(
+            results |
+            {
+                "trainer/global_step": trainer.global_step
+            }
+        )
+
+    @staticmethod
+    def compute_prd(eval_dist, ref_dist, num_angles=1001, epsilon=1e-10):
+        """Computes the PRD curve for discrete distributions.
+
+        This function computes the PRD curve for the discrete distribution eval_dist
+        with respect to the reference distribution ref_dist. This implements the
+        algorithm in [arxiv.org/abs/1806.2281349]. The PRD will be computed for an
+        equiangular grid of num_angles values between [0, pi/2].
+
+        Args:
+          eval_dist: 1D NumPy array or list of floats with the probabilities of the
+                     different states under the distribution to be evaluated.
+          ref_dist: 1D NumPy array or list of floats with the probabilities of the
+                    different states under the reference distribution.
+          num_angles: Number of angles for which to compute PRD. Must be in [3, 1e6].
+                      The default value is 1001.
+          epsilon: Angle for PRD computation in the edge cases 0 and pi/2. The PRD
+                   will be computes for epsilon and pi/2-epsilon, respectively.
+                   The default value is 1e-10.
+
+        Returns:
+          precision: NumPy array of shape [num_angles] with the precision for the
+                     different ratios.
+          recall: NumPy array of shape [num_angles] with the recall for the different
+                  ratios.
+
+        Raises:
+          ValueError: If not 0 < epsilon <= 0.1.
+          ValueError: If num_angles < 3.
         """
-        Performs K-means clustering of the training samples
-        :param training_samples: An array of m x d floats (m samples of dimension d)
+
+        if not (epsilon > 0 and epsilon < 0.1):
+            raise ValueError('epsilon must be in (0, 0.1] but is %s.' % str(epsilon))
+        if not (num_angles >= 3 and num_angles <= 1e6):
+            raise ValueError('num_angles must be in [3, 1e6] but is %d.' % num_angles)
+
+        # Compute slopes for linearly spaced angles between [0, pi/2]
+        angles = np.linspace(epsilon, np.pi / 2 - epsilon, num=num_angles)
+        slopes = np.tan(angles)
+
+        # Broadcast slopes so that second dimension will be states of the distribution
+        slopes_2d = np.expand_dims(slopes, 1)
+
+        # Broadcast distributions so that first dimension represents the angles
+        ref_dist_2d = np.expand_dims(ref_dist, 0)
+        eval_dist_2d = np.expand_dims(eval_dist, 0)
+
+        # Compute precision and recall for all angles in one step via broadcasting
+        precision = np.minimum(ref_dist_2d * slopes_2d, eval_dist_2d).sum(axis=1)
+        recall = precision / slopes
+
+        # handle numerical instabilities leaing to precision/recall just above 1
+        precision = np.clip(precision, 0, 1)
+        recall = np.clip(recall, 0, 1)
+
+        return precision, recall
+
+    @staticmethod
+    def _prd_to_f_beta(precision, recall, beta=1, epsilon=1e-10):
+        """Computes F_beta scores for the given precision/recall values.
+
+        The F_beta scores for all precision/recall pairs will be computed and
+        returned.
+
+        For precision p and recall r, the F_beta score is defined as:
+        F_beta = (1 + beta^2) * (p * r) / ((beta^2 * p) + r)
+
+        Args:
+          precision: 1D NumPy array of precision values in [0, 1].
+          recall: 1D NumPy array of precision values in [0, 1].
+          beta: Beta parameter. Must be positive. The default value is 1.
+          epsilon: Small constant to avoid numerical instability caused by division
+                   by 0 when precision and recall are close to zero.
+
+        Returns:
+          NumPy array of same shape as precision and recall with the F_beta scores for
+          each pair of precision/recall.
+
+        Raises:
+          ValueError: If any value in precision or recall is outside of [0, 1].
+          ValueError: If beta is not positive.
         """
 
-        n, d = training_samples.shape
-        k = self.number_of_bins
-        if self.whitening:
-            self.training_mean = np.mean(training_samples, axis=0)
-            self.training_std = np.std(training_samples, axis=0) + self.ndb_eps
+        if not ((precision >= 0).all() and (precision <= 1).all()):
+            raise ValueError('All values in precision must be in [0, 1].')
+        if not ((recall >= 0).all() and (recall <= 1).all()):
+            raise ValueError('All values in recall must be in [0, 1].')
+        if beta <= 0:
+            raise ValueError('Given parameter beta %s must be positive.' % str(beta))
 
-        if self.max_dims is None and d > 1000:
-            # To ran faster, perform binning on sampled data dimension (i.e. don't use all channels of all pixels)
-            self.max_dims = d//6
+        return (1 + beta ** 2) * (precision * recall) / (
+                (beta ** 2 * precision) + recall + epsilon)
 
-        whitened_samples = (training_samples-self.training_mean)/self.training_std
-        d_used = d if self.max_dims is None else min(d, self.max_dims)
-        self.used_d_indices = np.random.choice(d, d_used, replace=False)
-
-        print('Performing K-Means clustering of {} samples in dimension {} / {} to {} clusters ...'.format(n, d_used, d, k))
-        print('Can take a couple of minutes...')
-        if n//k > 1000:
-            print('Training data size should be ~500 times the number of bins (for reasonable speed and accuracy)')
-
-        clusters = KMeans(n_clusters=k, max_iter=100, n_jobs=-1).fit(whitened_samples[:, self.used_d_indices])
-
-        bin_centers = np.zeros([k, d])
-        for i in range(k):
-            bin_centers[i, :] = np.mean(whitened_samples[clusters.labels_ == i, :], axis=0)
-
-        # Organize bins by size
-        label_vals, label_counts = np.unique(clusters.labels_, return_counts=True)
-        bin_order = np.argsort(-label_counts)
-        self.bin_proportions = label_counts[bin_order] / np.sum(label_counts)
-        self.bin_centers = bin_centers[bin_order, :]
-        self.ref_sample_size = n
-        self.__write_to_bins_file(bins_file)
-        print('Done.')
-
-    def evaluate(self, query_samples, model_label=None):
+    def evaluate(self, reference_histogram, query_histogram):
         """
         Assign each sample to the nearest bin center (in L2). Pre-whiten if required. and calculate the NDB
         (Number of statistically Different Bins) and JS divergence scores.
@@ -398,132 +481,40 @@ class NDBCallback(Callback):
         :param model_label: optional label string for the evaluated model, allows plotting results of multiple models
         :return: results dictionary containing NDB and JS scores and array of labels (assigned bin for each query sample)
         """
-        n = query_samples.shape[0]
-        query_bin_proportions, query_bin_assignments = self.__calculate_bin_proportions(query_samples)
-        # print(query_bin_proportions)
-        different_bins = NDB.two_proportions_z_test(self.bin_proportions, self.ref_sample_size, query_bin_proportions,
-                                                    n, significance_level=self.significance_level,
-                                                    z_threshold=self.z_threshold)
+        different_bins = NDBCallback.two_proportions_z_test(reference_histogram,
+                                                            self.target_samples.shape[0],
+                                                            query_histogram,
+                                                            self.generated_samples.shape[0],
+                                                            significance_level=self.significance_level,
+                                                            z_threshold=self.z_threshold)
         ndb = np.count_nonzero(different_bins)
-        js = NDB.jensen_shannon_divergence(self.bin_proportions, query_bin_proportions)
-        results = {'NDB': ndb,
+        tvd = 0.5 * np.sum(np.abs(reference_histogram - query_histogram))
+        js = NDBCallback.jensen_shannon_divergence(reference_histogram, query_histogram)
+        precision, recall = self.compute_prd(query_histogram, reference_histogram)
+        plot = self.plot_precision_recall_curve(precision, recall)
+        results = {'NDB ratio': ndb / self.number_of_bins,
                    'JS': js,
-                   'Proportions': query_bin_proportions,
-                   'N': n,
-                   'Bin-Assignment': query_bin_assignments,
-                   'Different-Bins': different_bins}
-
-        if model_label:
-            print('Results for {} samples from {}: '.format(n, model_label), end='')
-            self.cached_results[model_label] = results
-            if self.results_file:
-                # print('Storing result to', self.results_file)
-                pkl.dump(self.cached_results, open(self.results_file, 'wb'))
-
-        print('NDB =', ndb, 'NDB/K =', ndb/self.number_of_bins, ', JS =', js)
+                   'precision recall': wandb.Image(plot),
+                   'f1 max': np.max(self._prd_to_f_beta(precision, recall)),
+                   'total variation distance': tvd,
+                   }
+        if self.target_samples.shape[1] == 2:
+            results |= {
+                'clustering': wandb.Image(self.plot_clusterization())
+            }
         return results
-
-    def print_results(self):
-        print('NSB results (K={}{}):'.format(self.number_of_bins, ', data whitening' if self.whitening else ''))
-        for model in sorted(list(self.cached_results.keys())):
-            res = self.cached_results[model]
-            print('%s: NDB = %d, NDB/K = %.3f, JS = %.4f' % (model, res['NDB'], res['NDB']/self.number_of_bins, res['JS']))
-
-    def plot_results(self, models_to_plot=None):
-        """
-        Plot the binning proportions of different methods
-        :param models_to_plot: optional list of model labels to plot
-        """
-        K = self.number_of_bins
-        w = 1.0 / (len(self.cached_results)+1)
-        assert K == self.bin_proportions.size
-        assert self.cached_results
-
-        # Used for plotting only
-        def calc_se(p1, n1, p2, n2):
-            p = (p1 * n1 + p2 * n2) / (n1 + n2)
-            return np.sqrt(p * (1 - p) * (1/n1 + 1/n2))
-
-        if not models_to_plot:
-            models_to_plot = sorted(list(self.cached_results.keys()))
-
-        # Visualize the standard errors using the train proportions and size and query sample size
-        train_se = calc_se(self.bin_proportions, self.ref_sample_size,
-                           self.bin_proportions, self.cached_results[models_to_plot[0]]['N'])
-        plt.bar(np.arange(0, K)+0.5, height=train_se*2.0, bottom=self.bin_proportions-train_se,
-                width=1.0, label='Train$\pm$SE', color='gray')
-
-        ymax = 0.0
-        for i, model in enumerate(models_to_plot):
-            results = self.cached_results[model]
-            label = '%s (%i : %.4f)' % (model, results['NDB'], results['JS'])
-            ymax = max(ymax, np.max(results['Proportions']))
-            if K <= 70:
-                plt.bar(np.arange(0, K)+(i+1.0)*w, results['Proportions'], width=w, label=label)
-            else:
-                plt.plot(np.arange(0, K)+0.5, results['Proportions'], '--*', label=label)
-        plt.legend(loc='best')
-        plt.ylim((0.0, min(ymax, np.max(self.bin_proportions)*4.0)))
-        plt.grid(True)
-        plt.title('Binning Proportions Evaluation Results for {} bins (NDB : JS)'.format(K))
-        plt.show()
-
-    def __calculate_bin_proportions(self, samples):
-        if self.bin_centers is None:
-            print('First run construct_bins on samples from the reference training data')
-        assert samples.shape[1] == self.bin_centers.shape[1]
-        n, d = samples.shape
-        k = self.bin_centers.shape[0]
-        D = np.zeros([n, k], dtype=samples.dtype)
-
-        print('Calculating bin assignments for {} samples...'.format(n))
-        whitened_samples = (samples-self.training_mean)/self.training_std
-        for i in range(k):
-            print('.', end='', flush=True)
-            D[:, i] = np.linalg.norm(whitened_samples[:, self.used_d_indices] - self.bin_centers[i, self.used_d_indices],
-                                     ord=2, axis=1)
-        print()
-        labels = np.argmin(D, axis=1)
-        probs = np.zeros([k])
-        label_vals, label_counts = np.unique(labels, return_counts=True)
-        probs[label_vals] = label_counts / n
-        return probs, labels
-
-    def __read_from_bins_file(self, bins_file):
-        if bins_file and os.path.isfile(bins_file):
-            print('Loading binning results from', bins_file)
-            bins_data = pkl.load(open(bins_file,'rb'))
-            self.bin_proportions = bins_data['proportions']
-            self.bin_centers = bins_data['centers']
-            self.ref_sample_size = bins_data['n']
-            self.training_mean = bins_data['mean']
-            self.training_std = bins_data['std']
-            self.used_d_indices = bins_data['d_indices']
-            return True
-        return False
-
-    def __write_to_bins_file(self, bins_file):
-        if bins_file:
-            print('Caching binning results to', bins_file)
-            bins_data = {'proportions': self.bin_proportions,
-                         'centers': self.bin_centers,
-                         'n': self.ref_sample_size,
-                         'mean': self.training_mean,
-                         'std': self.training_std,
-                         'd_indices': self.used_d_indices}
-            pkl.dump(bins_data, open(bins_file, 'wb'))
 
     @staticmethod
     def two_proportions_z_test(p1, n1, p2, n2, significance_level, z_threshold=None):
         # Per http://stattrek.com/hypothesis-test/difference-in-proportions.aspx
         # See also http://www.itl.nist.gov/div898/software/dataplot/refman1/auxillar/binotest.htm
         p = (p1 * n1 + p2 * n2) / (n1 + n2)
-        se = np.sqrt(p * (1 - p) * (1/n1 + 1/n2))
+        se = np.sqrt(p * (1 - p) * (1 / n1 + 1 / n2))
         z = (p1 - p2) / se
         # Allow defining a threshold in terms as Z (difference relative to the SE) rather than in p-values.
         if z_threshold is not None:
             return abs(z) > z_threshold
-        p_values = 2.0 * norm.cdf(-1.0 * np.abs(z))    # Two-tailed test
+        p_values = 2.0 * norm.cdf(-1.0 * np.abs(z))  # Two-tailed test
         return p_values < significance_level
 
     @staticmethod
@@ -532,7 +523,7 @@ class NDBCallback(Callback):
         Calculates the symmetric Jensen–Shannon divergence between the two PDFs
         """
         m = (p + q) * 0.5
-        return 0.5 * (NDB.kl_divergence(p, m) + NDB.kl_divergence(q, m))
+        return 0.5 * (NDBCallback.kl_divergence(p, m) + NDBCallback.kl_divergence(q, m))
 
     @staticmethod
     def kl_divergence(p, q):
@@ -547,13 +538,77 @@ class NDBCallback(Callback):
         p_pos = (p > 0)
         return np.sum(p[p_pos] * np.log(p[p_pos] / q[p_pos]))
 
+    def compute_histograms(self, reference, query):
+        if self.whitening:
+            training_mean = np.mean(reference, axis=0)
+            training_std = np.std(reference, axis=0) + self.ndb_eps
+            reference = (reference - training_mean) / training_std
+        self.kmeans = MiniBatchKMeans(n_clusters=self.number_of_bins, n_init=10, compute_labels=True)
+        reference_labels = self.kmeans.fit(reference).labels_
 
-class NDBCallbacks(Callback):
-    target_samples: tp.Union[torch.Tensor, tp.List]
+        if self.whitening:
+            query = (query - training_mean) / training_std
+        eval_labels = self.kmeans.predict(query)
+
+        eval_bins = np.histogram(eval_labels, bins=self.number_of_bins,
+                                 range=[0, self.number_of_bins], density=True)[0]
+        ref_bins = np.histogram(reference_labels, bins=self.number_of_bins,
+                                range=[0, self.number_of_bins], density=True)[0]
+        return eval_bins, ref_bins
+
+    @staticmethod
+    def plot_precision_recall_curve(precision, recall):
+        fig, ax = plt.subplots()
+        ax.plot(recall, precision)
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
+        ax.set_xlabel('Recall (coverage)', fontsize=12)
+        ax.set_ylabel('Precision (quality)', fontsize=12)
+        ax.set_aspect('equal')
+        fig.tight_layout()
+        return fig
+
+    def plot_clusterization(self):
+        from scipy.spatial import Voronoi, voronoi_plot_2d
+
+        centers = self.kmeans.cluster_centers_
+        fig, ax = plt.subplots()
+        ax.scatter(centers[:, 0], centers[:, 1], marker='s', c='red', label='Cluster centers')
+        ax.scatter(self.generated_samples[:, 0], self.generated_samples[:, 1], alpha=0.5, c='orange',
+                   label='Generated samples')
+        ax.scatter(self.target_samples[:, 0], self.target_samples[:, 1], alpha=0.5, c='green', label='Target samples')
+
+        vor = Voronoi(centers)
+        fig = voronoi_plot_2d(vor, ax, show_vertices=False, show_points=False)
+        ax.legend(loc='best')
+        ax.set_aspect('equal')
+        fig.tight_layout(pad=0.001)
+        return fig
+
+
+class MNISTClassDistributionCallback(Callback):
     generated_samples: tp.Union[torch.Tensor, tp.List]
     current_samples_count: int
 
+    def __init__(
+            self,
+            samples_count,
+    ):
+        from torch.distributions import Categorical
+        self.compute_entropy = lambda logits_tensor: Categorical(logits=logits_tensor).entropy().sum()
+        self.samples_count = samples_count
+        self.classifier = mnist_classifier
 
+    def on_validation_epoch_start(
+            self,
+            trainer: Trainer,
+            trainable: Trainable
+    ) -> None:
+        self.class_labels = []
+        self.sum_entropies = 0
+        self.current_samples_count = 0
+
+    @torch.no_grad()
     def on_validation_batch_end(
             self,
             trainer: Trainer,
@@ -565,32 +620,79 @@ class NDBCallbacks(Callback):
     ) -> None:
         num_samples_to_take = min(self.samples_count - self.current_samples_count, len(batch))
         if num_samples_to_take > 0:
-            self.target_samples.append(
-                batch[:num_samples_to_take].cpu()
-            )
-            self.generated_samples.append(
-                outputs[:num_samples_to_take].cpu()
-            )
+            logits = self.classifier(outputs[:num_samples_to_take])
+            self.sum_entropies += self.compute_entropy(logits)
+            self.class_labels += torch.argmax(logits, dim=-1).cpu().tolist()
             self.current_samples_count += num_samples_to_take
 
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: Trainable) -> None:
+        histogram = np.unique(self.class_labels, return_counts=True)
+        fig, ax = plt.subplots()
+        probs = histogram[1] / self.current_samples_count
+        kolmogorov_dist = np.max(np.abs(probs - 1 / 10))
+        ax.bar([str(i) for i in histogram[0]], probs)
+        ax.set_title("Histogram of generated class distribution")
+        trainer.logger.experiment.log(
+            {
+                "class distribution": wandb.Image(fig),
+                "average entropy": self.sum_entropies / self.current_samples_count,
+                "kolmogorov distance": kolmogorov_dist,
+                "trainer/global_step": trainer.global_step
+            }
+        )
+
+
+class FIDCallback(Callback):
+    def __init__(self):
+        from torchmetrics.image.fid import FrechetInceptionDistance
+        self.fid = FrechetInceptionDistance(feature=768)
+
+    @torch.no_grad()
+    def on_validation_batch_end(
+            self,
+            trainer: Trainer,
+            trainable: Trainable,
+            outputs: tp.Any,
+            batch: src.utils.Batch,
+            batch_idx: int,
+            dataloader_idx: int,
+    ) -> None:
+        self.fid.update(batch, real=True)
+        self.fid.update(outputs, real=False)
+
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module: Trainable) -> None:
+        trainer.logger.experiment.log(
+            {
+                "FID": self.fid.compute(),
+                "trainer/global_step": trainer.global_step
+            }
+        )
 
 
 if __name__ == "__main__":
-    dim=100
-    k=100
-    n_train = k*100
-    n_test = k*10
+    dim = 2
+    k = 100
+    n_train = k * 100
+    n_test = k * 10
 
     train_samples = np.random.uniform(size=[n_train, dim])
-    ndb = NDB(training_data=train_samples, number_of_bins=k, whitening=True)
+    ndb = NDBCallback(samples_count=100, whitening=True)
 
-    test_samples = np.random.uniform(high=1.0, size=[n_test, dim])
-    ndb.evaluate(test_samples, model_label='Test')
+    ndb.target_samples = [torch.randn(size=[n_test, dim])]
+    ndb.generated_samples = [torch.randn(size=[n_test, dim]) + 2]
 
-    test_samples = np.random.uniform(high=0.9, size=[n_test, dim])
-    ndb.evaluate(test_samples, model_label='Good')
+    res_dct = None
 
-    test_samples = np.random.uniform(high=0.75, size=[n_test, dim])
-    ndb.evaluate(test_samples, model_label='Bad')
 
-    ndb.plot_results(models_to_plot=['Test', 'Good', 'Bad'])
+    class logger:
+        def log(self, dct):
+            global res_dct
+            res_dct = dct
+
+
+    trainer = SimpleNamespace(logger=SimpleNamespace(experiment=logger()), global_step=1)
+
+    ndb.on_validation_epoch_end(trainer, None)
+    print(res_dct)
+    res_dct['precision recall'].show()
+    res_dct['clustering'].show()

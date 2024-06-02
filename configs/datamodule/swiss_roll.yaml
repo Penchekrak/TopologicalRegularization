@@ -1,0 +1,5 @@
+defaults:
+  - toy
+sampler:
+  _target_: src.samplers.SwissRollSampler
+  scale: 0.33

@@ -1,10 +1,11 @@
+import typing as tp
+
 import torch
-from torch import nn
-from torch.nn import functional as F
 import torchvision
+from torch import nn
+
 from src import utils
 from src.utils import Batch, compute_cross_barcodes, get_random_sample
-import typing as tp
 
 
 class Loss(torch.nn.Module):
@@ -106,6 +107,37 @@ def mtopdiv(points_a, points_b, dim):
     homologies = compute_cross_barcodes(points_a, points_b, dim=dim + 1)
     barcode = homologies[0][dim]
     return torch.sum(barcode[:, 1] - barcode[:, 0])
+
+
+class RandomDistanceMatrixLoss(Loss):
+    def __init__(self, weight: float = 1.0, fraction=0.01):
+        super().__init__(weight)
+        self.fraction = fraction
+
+    def _forward_impl(self, batch, output):
+        if self.fraction is None:
+            n_take = batch.shape[0] - 1
+        else:
+            n_take = int(batch.shape[0] * self.fraction)
+        pairs = get_random_sample(
+            torch.cartesian_prod(
+                torch.arange(batch.shape[0]),
+                torch.arange(output.shape[0]),
+            ),
+            n_take
+        )
+        random_dists = torch.dist(
+            batch[pairs[:, 0]],
+            output[pairs[:, 1]],
+        )
+
+        return random_dists.sum()
+
+    def forward(self, batch: Batch, output: tp.Any, optimization_mode: utils.OptimizationMode) -> torch.Tensor:
+        if optimization_mode == utils.OptimizationMode.GENERATOR:
+            return self._forward_impl(batch, output)
+        elif optimization_mode == utils.OptimizationMode.DISCRIMINATOR:
+            return None
 
 
 class MTopDivYXLoss(Loss):

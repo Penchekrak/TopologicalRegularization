@@ -1,0 +1,5 @@
+defaults:
+  - toy
+sampler:
+  _target_: src.samplers.MoonSampler
+  scale: 0.05

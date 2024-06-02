@@ -1,0 +1,10 @@
+defaults:
+  - toy
+sampler:
+  _target_: src.samplers.MixtureNormalSampler
+  locs:
+    - [ -1,  1 ]
+    - [ 1, -1 ]
+    - [ 1,  1 ]
+    - [ -1, -1 ]
+  scales: 0.33

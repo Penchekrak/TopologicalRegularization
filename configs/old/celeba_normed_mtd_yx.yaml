@@ -4,5 +4,5 @@ defaults:
 trainable:
     losses:
         -
-            _target_: src.losses.NormalizedMTopDivYXLoss
+            _target_: src.losses.MTopDivYXLoss
             dimension: 0

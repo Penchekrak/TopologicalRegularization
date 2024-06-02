@@ -3,7 +3,7 @@ from torch import nn
 
 
 class MLPGenerator(nn.Module):
-    def __init__(self, latent_dim, output_dim, hidden_dim, num_hidden_layers, activation=nn.ReLU, distribution=torch.distributions.Normal):
+    def __init__(self, latent_dim, output_dim, hidden_dim, num_hidden_layers, activation=nn.ReLU):
         super().__init__()
         layers = [nn.Linear(latent_dim, hidden_dim)]
         for _ in range(num_hidden_layers - 1):
@@ -39,7 +39,7 @@ class MLPDiscriminator(nn.Module):
             nn.Linear(hidden_dim, 1),
         ])
         if sigmoid:
-            layers.append(sigmoid)
+            layers.append(torch.nn.Sigmoid())
         self.net = nn.Sequential(*layers)
 
     def forward(self, input):

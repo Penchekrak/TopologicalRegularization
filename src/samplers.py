@@ -1,7 +1,9 @@
 import abc
 import typing as tp
 
+import numpy as np
 import torch
+from sklearn.datasets import make_moons, make_swiss_roll
 from torch.utils.data import IterableDataset, Dataset
 
 from torch import distributions as D
@@ -12,7 +14,6 @@ class _Sampler(IterableDataset):
     def sample(self) -> torch.Tensor:
         raise NotImplementedError
 
-    @abc.abstractmethod
     def log_prob(self, samples: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
@@ -84,36 +85,39 @@ class MixtureNormalSampler(_Sampler):
 #         pass
 
 
-# class MoonSampler(Sampler):
-#     def __init__(
-#             self, scale=1.,
-#     ):
-#         super(MoonSampler, self).__init__()
-#         self.scale = scale
-#
-#     def sample(self, batch_size=10):
-#         batch = torch.tensor(datasets.make_moons(batch_size, noise=.1)[0], dtype=torch.float32)
-#         batch *= self.scale
-#         return batch.to(device)
-#
-#
-# class SwissRollSampler(Sampler):
-#     def __init__(
-#             self, dim=2, scale=7.5
-#     ):
-#         super(SwissRollSampler, self).__init__()
-#         assert dim == 2
-#         self.dim = 2
-#         self.scale = scale
-#
-#     def sample(self, batch_size=10):
-#         batch = datasets.make_swiss_roll(
-#             n_samples=batch_size,
-#             noise=0.8
-#         )[0].astype('float32')[:, [0, 2]] / self.scale
-#         return torch.tensor(batch).to(device)
-#
-#
+class MoonSampler(_Sampler):
+    def __init__(
+            self, scale=1.,
+    ):
+        self.scale = scale
+
+    def sample(self):
+        angle = torch.rand(1) * torch.pi
+        if torch.rand(1).item() < 0.5:
+            xy = torch.cat([torch.cos(angle), torch.sin(angle)])
+        else:
+            xy = torch.cat([1 - torch.cos(angle), 0.5 - torch.sin(angle)])
+        xy += torch.randn(2) * self.scale
+        return xy
+
+
+class SwissRollSampler(_Sampler):
+    def __init__(
+            self, scale=7.5
+    ):
+        self.scale = scale
+
+    def sample(self):
+        t = 1.5 * torch.pi * (1 + 2 * torch.rand(1))
+
+        x = t * np.cos(t)
+        z = t * np.sin(t)
+
+        X = torch.cat((x, z))
+        X += self.scale * torch.randn(2)
+
+        return X
+
 # class MixNGaussiansSampler(Sampler):
 #     def __init__(self, dim=2, N=8, with_central=False, std=1, r=12):
 #         super(MixNGaussiansSampler, self).__init__()
@@ -146,3 +150,7 @@ class MixtureNormalSampler(_Sampler):
 #     for center in self.centers:
 #         normal = torch.distributions.Normal(loc=torch.tensor(center), scale=self.std)
 #         nor
+
+
+# c = SwissRollSampler()
+# print(c.sample())

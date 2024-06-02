@@ -1,0 +1,7 @@
+defaults:
+    - four_gaussians_gan
+    - _self_
+trainable:
+    losses:
+        - _target_: src.losses.MTopDivYXLoss
+          dimension: 0
