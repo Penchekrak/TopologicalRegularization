@@ -1,0 +1,50 @@
+logger:
+    project: "topogans"
+    offline: true
+    entity: "penchekrak"
+trainer:
+    limit_train_batches: 100
+    limit_val_batches: 10
+    max_epochs: 1000
+    log_every_n_steps: 1
+    check_val_every_n_epoch: 100
+    accelerator: 'cuda'
+    callbacks:
+      - _target_: src.callbacks.PlotDistributions2D
+        add_potential_contour: False
+      - _target_: src.callbacks.GC
+      - _target_: src.callbacks.NDBCallback
+        samples_count: 1000
+trainable:
+    _target_: src.trainable.Trainable
+
+    generator:
+        _target_: src.models.MLPGenerator
+        latent_dim: 2
+        hidden_dim: 16
+        output_dim: 2
+        num_hidden_layers: 5
+
+    losses:
+      - _target_: src.losses.MTopDivYXLoss
+        dimension: 0
+
+    optimizer_config:
+        generator:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+            frequency: 1
+        losses:
+            optimizer:
+                _target_: torch.optim.Adam
+                _partial_: True
+            frequency: 1
+
+datamodule:
+    _target_: src.datasets.SingleSamplerDataModule
+    batch_size: 256
+    sampler:
+        _target_: src.samplers.MoonSampler
+        scale: 0.33
+        

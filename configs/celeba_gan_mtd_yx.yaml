@@ -1,0 +1,14 @@
+defaults:
+  - celeba_gan
+trainable:
+  losses:
+    - _target_: src.losses.WassersteinGPGANLoss
+      discriminator:
+        _target_: src.models.ConvolutionalDiscriminator
+        channels: 3
+        hidden_dim: 64
+        sigmoid: false
+    - _target_: src.losses.PerceptualArcFaceMTopDivYXLoss
+      dimension: 0
+    - _target_: src.losses.MTopDivYXLoss
+      dimension: 0

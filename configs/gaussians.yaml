@@ -1,0 +1,10 @@
+defaults:
+    - default
+trainer:
+    callbacks:
+        - _target_: src.callbacks.PlotDistributions2D
+          add_potential_contour: False
+        - _target_: src.callbacks.LogLikelihood
+        - _target_: src.callbacks.GC
+        - _target_: src.callbacks.NDBCallback
+          samples_count: 1000
