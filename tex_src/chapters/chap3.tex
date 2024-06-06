@@ -1,0 +1,73 @@
+\chapter{Methodology}
+
+\section{Regularizing GANs with Manifold Topology Divergence}
+
+We directly use MTop-Div${}_0$ measure between generated objects and data sampled from the dataset as sole or additional loss term. This, combined with batched nature of gradient-based methods for neural network optimization results in Monte-Carlo estimation of regularizer value. Since sum of lifespans of topological discrepancies  in magnitude is dependent on a scale of underlying point cloud we normalize it by scaling down with a data-dependent factor, which should loosely represent scale of bare metric due to natural noise in introduced in subsampling:
+
+\begin{algorithm}[h!]
+\caption{Normalized MTop-Div${}_0$ computation}
+\SetAlgoLined
+\KwData{Target data distribution $\mathcal{Q}$. Generative model distribution, from which we can sample $\mathcal{P}$. Subsampling coefficient $k$.}
+\KwOut{Normalized MTop-Div${}_0$ Monte-Carlo estimation $\ell(\mathcal{Q}, \mathcal{P})$}
+
+$q \sim \mathcal{Q}, q_1, q_2 \sim \mathcal{Q}$, such that $q_1$ is k-times smaller than $q_2$
+$p \sim \mathcal{P}$
+
+$\ell(\mathcal{Q}, \mathcal{P})$ := $\frac{\text{MTop-Div}_0(q, p)}{\text{MTop-Div}_0(q_1, q_2)}$
+
+\textbf{return} $\ell$
+\label{algo:normedmtopdiv}
+\end{algorithm}
+
+
+\section{Regularizing Gaussian Splatting}
+To minimize number of small disconnected components we additionally minimize sum of Barcode${}_0$ segments lengths, computed for point cloud of gaussian centers, while consider only edges (in Rips complex) that are smaller than certain threshold. Thus, we do not force distant semantically different regions to get closer.
+\begin{algorithm}[h!]
+\caption{Regularized Gaussian Splatting iteration \label{algo:reg}}
+\SetAlgoLined
+\KwData{Set of multi-view images with camera parameters $\mathcal{D}$, Gaussian Splats state ${\mathcal{S}}_{i-1}$, regularizer weight $\lambda_{reg}$}
+\KwOut{Normalized MTop-Div${}_0$ Monte-Carlo estimation $\ell(\mathcal{Q}, \mathcal{P})$}
+sample image-camera pair from dataset $(i, c) \sim \mathcal{D}$
+
+compute reconstruction loss $\mathcal{L}_{rec} = MSE(i, \text{render}({\mathcal{S}}_{i-1}, c))$
+
+compute regularizer term $\mathcal{L}_{reg} = \sum \text{Barcode}_0 ({\mathcal{S}}_{i-1})$
+
+perform a gradient update of splats ${\mathcal{S}}_{i} = \text{update} ({\mathcal{S}}_{i - 1}, \nabla (\mathcal{L}_{rec} + \lambda_{reg}\mathcal{L}_{reg}))$
+
+\textbf{return} $\ell$
+\end{algorithm}
+In order to evaluate the performance of the homological regularization on this task, we introduce the \emph{LGCR} (Local to Global Clusters Ratio) metric. Intuitively, LGCR is meant to capture the fact that all spatial clusters of points are semantically meaningful, and thus that no floaters appear in the point cloud. 
+
+To compute this metric, we apply the DBSCAN clustering algorithm (!!!) two times to our point cloud, first to discover a (potentially large) number of \emph{local} clusters with points lying very close to each other, and then to discover a (smaller) number of \emph{global} clusters (with lesser constraints on the closeness of points). 
+Note that floaters are typically scattered within a small distance of the surface of the main object. Thus, we expect floaters to manifest as separate clusters after the local clusterization, but disappear in the global picture. Therefore, we should expect that point clouds with similar numbers of local and global clusters contain fewer points. The LGCR metric then should capture the fraction of local clusters that survive in the global picture. 
+
+Formally, we use the following algorithm:
+
+\begin{algorithm}[h!]
+    
+\caption{LGCR algorithm.}
+\SetAlgoLined
+\KwData{An array of point cloud coordinates $\mathcal{X}$. Local and global spatial connectedness coefficients $\varepsilon_{l}$ and $\varepsilon_{g}$.}
+\KwOut{LGCR value $\mu(\mathcal{X}, \varepsilon_l, \varepsilon_g)$}
+
+$D$ := diameter of point cloud $\mathcal{X}$
+
+$\mathcal{X}_l$ := clusterization of $\mathcal{X}$ using DBSCAN, $\text{eps} = D{\varepsilon_l}$
+
+$\mathcal{X}_g$ := clusterization of $\mathcal{X}$ using DBSCAN, $\text{eps} = D{\varepsilon_g}$
+
+$\eta_l$:= number of clusters in $\mathcal{X}_l$
+
+$\eta_g$:= number of clusters in $\mathcal{X}_g$
+
+$\mu$ := $\frac{\eta_l}{\eta_g}$
+
+\textbf{return} $\mu$
+\label{algo:lgcr}
+\end{algorithm}
+
+Note that usage of LGCR requires fixing two constants, $\varepsilon_l$ and $\varepsilon_g$ which satisfy $0 < \varepsilon_l < \varepsilon_g$. Then e.g. local clusterization will run a DBSCAN clusterization algorithm with a parameter $\varepsilon = D{\varepsilon_l}$ (remember that the parameter $\varepsilon$ serves as a maximal distance at which points are considered to lie in the same cluster). Multiplication by $D$ ensures that LGCR algorithm is thus scaling-invariant, and so we can choose a fixed values of $\varepsilon_l, \, \varepsilon_g$ for multiple point clouds. In practice, we find setting $\varepsilon_l = 0.001$ and $\varepsilon_g = 0.1$ to be a reasonable choice for all point clouds in our experiments.
+
+We use this metric to evaluate the effect that adding the regularization has on the number of floaters in the scene. We use a well-known Gaussian Splatting algorithm \cite{kerbl20233d} as a baseline. We set a $\lambda_{reg} = 0.1$ to be the weight of the homological regularization summand in the loss. Also in practice we find that computing the homology of the whole point cloud is computationally ineffective, so for large images we choose at each gradient step a random subset of the point cloud, compute its homology, and use it as an approximation of the homology of the whole set. All experiments were conducted on Mip-NeRF-360 dataset \cite{barron2022mipnerf}, which contains photogrammetric data for various objects and scenes.
+

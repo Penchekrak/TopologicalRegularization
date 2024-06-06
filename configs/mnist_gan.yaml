@@ -53,3 +53,7 @@ trainable:
                     - 0.5
                     - 0.999
             frequency: 1
+datamodule:
+    _target_: src.datasets.MNISTDataModule
+    batch_size: 512
+    data_dir: spiridonov/TopReg/data/mnist/MNIST

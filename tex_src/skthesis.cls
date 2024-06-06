@@ -17,6 +17,8 @@
 
 \usepackage[russian, english]{babel}
 \usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{array}
 
 \usepackage{fontspec}
 \defaultfontfeatures[Computer Modern]{
@@ -37,6 +39,9 @@
 %   {\normalfont\large\bfseries\centering}
 %   {\thesection}{1em}{}
 \titlespacing*{\chapter}{0pt}{30pt}{20pt}
+% \titleclass{\chapter}{straight}
+% \renewcommand{\cleardoublepage}{}
+% \renewcommand{\clearpage}{}
 
 
 
@@ -66,9 +71,6 @@
 \geometry{right=1.5cm}
  \geometry{top=2cm}
  \geometry{bottom=2cm}
-
-
-\usepackage{ifmtarg}% http://ctan.org/pkg/ifmtarg
 
 % The next two macros compensate page style for headers and footers
 % We only need them in page styles that USE headers and footers.
@@ -148,21 +150,21 @@ of this thesis document in whole and in part in any medium now known or hereafte
 \newbox\@titlerussupervisor \newbox\@titleruscovisor \newbox\@abstractrussupervisor
 
 
-\def\supervisor#1#2#3{\setbox\@titlesupervisor\vbox
+\def\supervisor#1#2{\setbox\@titlesupervisor\vbox
   {\unvbox\@titlesupervisor \vskip 10pt% plus 1fil minus 1fil
   \def\baselinestretch{1}\large
   \signature{Research Advisor:}{#1 \\ #2}}
   \setbox\@abstractsupervisor\vbox{\unvbox\@abstractsupervisor
   \vskip\baselineskip \def\baselinestretch{1}\@normalsize 
-  \par\noindent Research Advisor: \\ Name: #1 \@ifnotmtarg{#3}{\\ Degree: #3} \\ Title: #2}}
+  \par\noindent Research Advisor: \\ Name: #1 \\ Title: #2}}
 
-\def\supervisorrus#1#2#3{\setbox\@titlerussupervisor\vbox
+\def\supervisorrus#1#2{\setbox\@titlerussupervisor\vbox
   {\unvbox\@titlerussupervisor \vskip 10pt% plus 1fil minus 1fil
   \def\baselinestretch{1}\large
   \signature{Научный руководитель:}{#1 \\ #2}}
   \setbox\@abstractrussupervisor\vbox{\unvbox\@abstractrussupervisor
   \vskip\baselineskip \def\baselinestretch{1}\@normalsize 
-  \par\noindent Научный руководитель: \\ Имя: #1 \\ Ученое звание, степень: #3 \\ Должность: #2}}
+  \par\noindent Научный руководитель: \\ Имя: #1 \\ Должность: #2}}
 
 
 \def\cosupervisor#1#2#3{\setbox\@titlecovisor\vbox
@@ -243,7 +245,7 @@ MASTER\/'S THESIS\\
 \par
 \def\baselinestretch{1}\@normalsize
 Submitted to the Skolkovo Institute of Science and Technology \\
-% on \@thesisdate
+on \@thesisdate
 \end{center}
 \par
 \begin{abstract}}
@@ -291,7 +293,25 @@ Submitted to the Skolkovo Institute of Science and Technology \\
 \def\abstract{\subsection*{\centering Abstract}\small\def\baselinestretch{1}\@normalsize}
 \def\endabstract{\par}
 
-\def\abstractrus{\subsection*{\centering Реферат}\small\def\baselinestretch{1}\@normalsize}
+\def\abstractrus{\subsection*{\centering Аннотация}\small\def\baselinestretch{1}\@normalsize}
 \def\endabstractrus{\par}
 
 \usepackage{kantlipsum}
+\usepackage{booktabs}
+\usepackage{caption} 
+\captionsetup[table]{skip=10pt}
+\captionsetup[table]{singlelinecheck=false}
+% \usepackage{threeparttable}
+
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+
+\makeatletter  % if figure in the empty page then it locates in the top
+    \setlength\@fptop{0\p@}
+\makeatother
+
+% Hacks to achieve the excellent grade:
+% Find the evaluation criteria of juries from Canvas. Include all the required information in your thesis. 
+% The more you write, the better. However, keep the information relevant to your thesis.
+% You can contact me and ask some questions about the thesis defense: https://www.linkedin.com/in/fakhriddin-tojiboev-a81b98198/

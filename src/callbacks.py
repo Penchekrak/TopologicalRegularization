@@ -300,7 +300,7 @@ facenet = InceptionResnetV1(pretrained='vggface2').eval().cuda()
 
 feature_extractors = dict(
     flattener=lambda x: x.flatten(start_dim=1, end_dim=-1),
-    mnist_extractor=mnist_classifier.compute_embedding,
+    mnist_extractor=lambda x: mnist_classifier.compute_embedding(x),
     face_extractor=lambda x: facenet(torch.nn.functional.interpolate(x, (160, 160))),
 )
 
@@ -645,7 +645,7 @@ class MNISTClassDistributionCallback(Callback):
 class FIDCallback(Callback):
     def __init__(self):
         from torchmetrics.image.fid import FrechetInceptionDistance
-        self.fid = FrechetInceptionDistance(feature=768)
+        self.fid = FrechetInceptionDistance(feature=768).cuda()
 
     @torch.no_grad()
     def on_validation_batch_end(
@@ -657,8 +657,10 @@ class FIDCallback(Callback):
             batch_idx: int,
             dataloader_idx: int,
     ) -> None:
-        self.fid.update(batch, real=True)
-        self.fid.update(outputs, real=False)
+        # print('min max', batch.min(), batch.max())
+        self.fid.update((batch * 255.0).byte(), real=True)
+
+        self.fid.update((outputs * 255.0).byte(), real=False)
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: Trainable) -> None:
         trainer.logger.experiment.log(

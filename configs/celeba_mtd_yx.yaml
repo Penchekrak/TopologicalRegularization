@@ -1,0 +1,11 @@
+defaults:
+    - celeba_gan
+trainable:
+    losses:
+        - _target_: src.losses.PerceptualArcFaceMTopDivYXLoss
+          weight: 10.0
+          dimension: 0
+        - _target_: src.losses.MTopDivYXLoss
+          dimension: 0
+datamodule:
+    batch_size: 1024

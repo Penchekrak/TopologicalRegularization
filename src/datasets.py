@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets import MNIST as _MNIST, USPS as _USPS, CelebA as _CelebA, VisionDataset
 from torchvision.datasets.utils import verify_str_arg
+import pandas
 
 
 #
@@ -45,7 +46,7 @@ class CelebA(_CelebA):
     def __init__(
             self,
             root: str,
-            split: str = "train",
+            split: str = "all",
             # target_type="attr",
             transform=None,
             target_transform=None,
@@ -56,24 +57,16 @@ class CelebA(_CelebA):
         if download:
             self.download()
 
-        split_map = {
-            "train": 0,
-            "valid": 1,
-            "test": 2,
-            "all": None,
-        }
-        split_ = split_map[verify_str_arg(split.lower(), "split", ("train", "valid", "test", "all"))]
-        splits = self._load_csv("list_eval_partition.txt")
+        self.filename = pandas.read_csv(
+            os.path.join(self.root, self.base_folder, "list_eval_partition.csv"))['image_id'].values
 
-        mask = slice(None) if split_ is None else (splits.data == split_).squeeze()
-
-        if mask == slice(None):  # if split == "all"
-            self.filename = splits.index
+        if split == 'valid':
+            self.filename = self.filename[-4096:]
         else:
-            self.filename = [splits.index[i] for i in torch.squeeze(torch.nonzero(mask))]
+            self.filename = self.filename[:-4096]
 
     def __getitem__(self, index: int):
-        X = PIL.Image.open(os.path.join(self.root, self.base_folder, "img_align_celeba", self.filename[index]))
+        X = PIL.Image.open(os.path.join(self.root, self.base_folder, "img_align_celeba", "img_align_celeba", self.filename[index]))
         if self.transform is not None:
             X = self.transform(X)
         return X

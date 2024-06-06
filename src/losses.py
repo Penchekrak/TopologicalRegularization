@@ -2,6 +2,7 @@ import typing as tp
 
 import torch
 import torchvision
+from facenet_pytorch.models.inception_resnet_v1 import InceptionResnetV1
 from torch import nn
 
 from src import utils
@@ -186,10 +187,14 @@ class SquaredNormalizedMTopDivXYLoss(SquaredNormalizedMTopDivYXLoss, NormalizedM
 
 
 class PerceptualDistanceSquaredNormalizedMTopDivYXLoss(SquaredNormalizedMTopDivYXLoss):
-    def __init__(self, weights_path: str, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.model = torchvision.models.resnet18()
-        self.model.load_state_dict(torch.load(weights_path, map_location='cpu'))
+        self.model = torchvision.models.resnet18(pretrained=True)
+        self.model.cuda()
+        for p in self.model.parameters():
+            p.requires_grad = False
+        self.mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').unsqueeze(-1).unsqueeze(-1)
+        self.std = torch.tensor([0.229, 0.224, 0.225], device='cuda').unsqueeze(-1).unsqueeze(-1)
 
     def _forward_impl(self, batch: Batch, output: tp.Any):
         x_vector, y_vector = self.get_feature_vectors(batch, output)
@@ -203,18 +208,93 @@ class PerceptualDistanceSquaredNormalizedMTopDivYXLoss(SquaredNormalizedMTopDivY
     def get_feature_vectors(self, batch, output):
         output = (output - self.mean) / self.std
         batch = (batch - self.mean) / self.std
-        if self.resize:
-            output = self.transform(output, mode='bilinear', size=(224, 224), align_corners=False)
-            batch = self.transform(batch, mode='bilinear', size=(224, 224), align_corners=False)
+        # if self.resize:
+        #     output = self.transform(output, mode='bilinear', size=(224, 224), align_corners=False)
+        #     batch = self.transform(batch, mode='bilinear', size=(224, 224), align_corners=False)
         x = output
-        x_vector = x.new_empty(x.shape[0], 0)
-        for block in self.blocks:
-            x = block(x)
-            x_vector = torch.cat((x_vector, x.flatten(1)), dim=-1)
+        x_vector = self.calc_embs(x)
         with torch.no_grad():
             y = batch
-            y_vector = y.new_empty(y.shape[0], 0)
-            for block in self.blocks:
-                y = block(y)
-                y_vector = torch.cat((y_vector, y.flatten(1)), dim=-1)
+            y_vector = self.calc_embs(y)
+        return x_vector, y_vector
+
+    def calc_embs(self, x):
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+        x = self.model.layer4(x)
+
+        x = self.model.avgpool(x)
+        return x
+
+
+class PerceptualMTopDivYXLoss(MTopDivYXLoss):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model = torchvision.models.resnet18(pretrained=True)
+        self.model.cuda()
+        for p in self.model.parameters():
+            p.requires_grad = False
+        self.mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').unsqueeze(-1).unsqueeze(-1)
+        self.std = torch.tensor([0.229, 0.224, 0.225], device='cuda').unsqueeze(-1).unsqueeze(-1)
+
+    def _forward_impl(self, batch: Batch, output: tp.Any):
+        x_vector, y_vector = self.get_feature_vectors(batch, output)
+        return super()._forward_impl(y_vector, x_vector)
+
+    def get_feature_vectors(self, batch, output):
+        output = (output - self.mean) / self.std
+        batch = (batch - self.mean) / self.std
+        # if self.resize:
+        #     output = self.transform(output, mode='bilinear', size=(224, 224), align_corners=False)
+        #     batch = self.transform(batch, mode='bilinear', size=(224, 224), align_corners=False)
+        x = output
+        x_vector = self.calc_embs(x)
+        with torch.no_grad():
+            y = batch
+            y_vector = self.calc_embs(y)
+        return x_vector, y_vector
+
+    def calc_embs(self, x):
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+        x = self.model.layer4(x)
+
+        x = self.model.avgpool(x)
+        return x
+
+
+
+class PerceptualArcFaceMTopDivYXLoss(MTopDivYXLoss):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model = InceptionResnetV1(pretrained='vggface2').eval().cuda()
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+    def _forward_impl(self, batch: Batch, output: tp.Any):
+        x_vector, y_vector = self.get_feature_vectors(batch, output)
+        return super()._forward_impl(y_vector, x_vector)
+
+
+    def calc_embs(self, x):
+        return self.model(torch.nn.functional.interpolate(x, (160, 160)))
+
+    def get_feature_vectors(self, batch, output):
+        x = output
+        x_vector = self.calc_embs(x)
+        with torch.no_grad():
+            y = batch
+            y_vector = self.calc_embs(y)
         return x_vector, y_vector
